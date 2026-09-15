@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PIN TO WIN — Admin</title>
+  <style>
+    :root{--navy:#00205B;--ocean:#030d2a;--orange:#f05b22;--sky:#00adef;--paper:#F9F8F5;--muted:#667085;--border:rgba(0,32,91,.12)}
+    *{box-sizing:border-box} body{margin:0;background:var(--paper);color:#121826;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    main{width:min(1180px,94vw);margin:0 auto;padding:48px 0 70px}
+    .head{display:flex;justify-content:space-between;align-items:end;gap:20px;margin-bottom:24px}
+    h1{margin:0;color:var(--navy);font-size:clamp(2rem,5vw,4.5rem);line-height:.9;letter-spacing:-.05em}
+    .eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;font-weight:900;color:var(--orange);margin-bottom:10px}
+    .panel{background:#fff;border:1px solid var(--border);border-radius:20px;box-shadow:0 24px 60px rgba(0,32,91,.08);overflow:hidden}
+    .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:18px 20px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+    .stats{color:var(--muted);font-size:13px}.stats strong{color:var(--navy)}
+    button{border:0;border-radius:11px;padding:12px 17px;font-weight:800;letter-spacing:.04em;cursor:pointer}
+    .primary{background:var(--orange);color:#fff}.secondary{background:#eef3f8;color:var(--navy)}
+    .login{max-width:430px;margin:80px auto;background:#fff;padding:28px;border:1px solid var(--border);border-radius:22px;box-shadow:0 24px 60px rgba(0,32,91,.1)}
+    label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.12em;font-weight:900;color:var(--muted);margin:18px 0 7px}
+    input{width:100%;height:48px;border:1px solid var(--border);border-radius:11px;padding:0 13px;font-size:17px;color:var(--navy);outline:none}
+    input:focus{border-color:var(--sky);box-shadow:0 0 0 4px rgba(0,173,239,.12)}
+    .login h2{margin:0;color:var(--navy);font-size:28px}.error{margin-top:12px;color:#b42318;font-size:13px;min-height:18px}
+    table{width:100%;border-collapse:collapse} th,td{text-align:left;padding:14px 16px;border-bottom:1px solid rgba(0,32,91,.07);font-size:13px;vertical-align:top} th{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);background:#fbfcfd}
+    .empty{padding:42px 20px;text-align:center;color:var(--muted)}
+    .note{font-size:12px;color:var(--muted);margin-top:14px;line-height:1.5}
+    #app{display:none}.local-note{color:#475467;font-size:12px}
+    @media(max-width:720px){th:nth-child(1),td:nth-child(1){display:none}th,td{padding:12px 10px} .head{align-items:start;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <div id="loginView" class="login">
+    <div class="eyebrow">PIN TO WIN // ADMIN</div>
+    <h2>Captured entries</h2>
+    <p class="note">Enter the staff password to view and download the conference EOI data.</p>
+    <label for="password">Admin password</label>
+    <input id="password" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Password">
+    <button id="loginBtn" class="primary" style="width:100%;margin-top:16px">Open dashboard</button>
+    <div id="loginError" class="error"></div>
+  </div>
+
+  <main id="app">
+    <div class="head">
+      <div><div class="eyebrow">RFDS // PIN TO WIN</div><h1>Captured EOIs</h1></div>
+      <button id="logoutBtn" class="secondary">Log out</button>
+    </div>
+    <section class="panel">
+      <div class="toolbar">
+        <div class="stats"><strong id="serverCount">0</strong> server entries · <span class="local-note"><strong id="localCount">0</strong> iPad local backup entries</span></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button id="refreshBtn" class="secondary">Refresh</button><button id="leaderboardBtn" class="secondary">Backup Leaderboard</button><button id="csvBtn" class="primary">Download EOI CSV</button></div>
+      </div>
+      <div id="tableWrap"></div>
+    </section>
+    <p class="note">The CSV combines the server records with any unsynced local iPad backup records and removes duplicates by submission ID.</p>
+  </main>
+
+<script>
+const LOCAL_KEY = 'rfds_pin_to_win_eois';
+const loginView = document.getElementById('loginView');
+const app = document.getElementById('app');
+const loginBtn = document.getElementById('loginBtn');
+const password = document.getElementById('password');
+const loginError = document.getElementById('loginError');
+const serverCount = document.getElementById('serverCount');
+const localCount = document.getElementById('localCount');
+const tableWrap = document.getElementById('tableWrap');
+let rows = [];
+
+function localRows(){
+  try {
+    const raw = JSON.parse(localStorage.getItem(LOCAL_KEY) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch { return []; }
+}
+function fmtDate(value){
+  try { return new Date(value).toLocaleString('en-AU'); } catch { return value || ''; }
+}
+function escapeHtml(value){return String(value ?? '').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
+function normalise(remote, local){
+  const map = new Map();
+  [...remote, ...local].forEach(r=>{
+    const clientId = r.client_id || r.clientId || ('local-'+r.submitted_at+'-'+r.full_name+'-'+r.email);
+    if(!map.has(clientId)) map.set(clientId,{id:r.id||'',client_id:clientId,submitted_at:r.submitted_at||r.submittedAt||'',full_name:r.full_name||r.fullName||'',email:r.email||'',source_url:r.source_url||r.sourceUrl||'',local:!r.id});
+  });
+  return [...map.values()].sort((a,b)=>String(b.submitted_at).localeCompare(String(a.submitted_at)));
+}
+function render(){
+  const local = localRows();
+  localCount.textContent = local.length;
+  serverCount.textContent = rows.length;
+  const merged = normalise(rows,local);
+  if(!merged.length){tableWrap.innerHTML='<div class="empty">No submissions found.</div>';return;}
+  tableWrap.innerHTML='<table><thead><tr><th>Date</th><th>Name</th><th>Email</th><th>Source</th></tr></thead><tbody>'+merged.map(r=>'<tr><td>'+escapeHtml(fmtDate(r.submitted_at))+'</td><td><strong>'+escapeHtml(r.full_name)+'</strong></td><td>'+escapeHtml(r.email || 'Not provided')+'</td><td>'+escapeHtml(r.local?'iPad local backup':'Server')+'</td></tr>').join('')+'</tbody></table>';
+}
+async function load(){
+  const res = await fetch('/api/eoi-admin?action=list',{credentials:'same-origin'});
+  const result = await res.json().catch(()=>({}));
+  if(res.status===401){showLogin('Session expired. Please log in again.');return;}
+  if(!res.ok || !result.ok) throw new Error(result.error || 'Could not load entries.');
+  rows = Array.isArray(result.rows)?result.rows:[];
+  render();
+}
+function showApp(){loginView.style.display='none';app.style.display='block';load().catch(err=>{tableWrap.innerHTML='<div class="empty">'+escapeHtml(err.message)+'</div>';render();});}
+function showLogin(message=''){app.style.display='none';loginView.style.display='block';loginError.textContent=message;password.focus();}
+loginBtn.addEventListener('click',async()=>{
+  loginError.textContent='';
+  try{
+    const res=await fetch('/api/eoi-admin?action=login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:password.value}),credentials:'same-origin'});
+    const result=await res.json().catch(()=>({}));
+    if(!res.ok||!result.ok) throw new Error(result.error||'Login failed.');
+    password.value='';showApp();
+  }catch(err){loginError.textContent=err.message;}
+});
+password.addEventListener('keydown',e=>{if(e.key==='Enter')loginBtn.click();});
+document.getElementById('refreshBtn').addEventListener('click',()=>load().catch(err=>{tableWrap.innerHTML='<div class="empty">'+escapeHtml(err.message)+'</div>';}));
+document.getElementById('logoutBtn').addEventListener('click',async()=>{await fetch('/api/eoi-admin?action=logout',{method:'POST',credentials:'same-origin'});showLogin();});
+document.getElementById('leaderboardBtn').addEventListener('click',()=>{
+  let board=[];
+  try{ board=JSON.parse(localStorage.getItem('rfds_demo_board')||'[]'); }catch{}
+  if(!Array.isArray(board)||!board.length){alert('No leaderboard entries found on this iPad.');return;}
+  const rows=[['Rank','Name','Score','Flights'],...board.map((r,i)=>[i+1,r.name||'',Number(r.score||0),Number(r.flights||3)])];
+  const csv=rows.map(row=>row.map(v=>'\"'+String(v??'').replace(/\"/g,'\"\"')+'\"').join(',')).join('\r\n');
+  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='PIN_TO_WIN_LEADERBOARD_BACKUP_'+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+});
+document.getElementById('csvBtn').addEventListener('click',()=>{
+  const merged = normalise(rows,localRows());
+  if(!merged.length){alert('There are no entries to export.');return;}
+  const header=['Timestamp','Name','Email','Record Source'];
+  const csvRows=[header,...merged.map(r=>[fmtDate(r.submitted_at),r.full_name,r.email||'',r.local?'iPad local backup':'Server'])];
+  const csv=csvRows.map(row=>row.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');
+  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='PIN_TO_WIN_EOI_'+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+});
+showLogin();
+</script>
+</body>
+</html>
